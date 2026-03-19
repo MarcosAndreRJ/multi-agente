@@ -1,0 +1,42 @@
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: multi-agent
+    restart: unless-stopped
+
+    # Permite que "host.docker.internal" aponte para o host no Linux.
+    # No Docker Desktop (Windows/Mac) isso já funciona automaticamente.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    ports:
+      - "3000:3000"
+
+    env_file:
+      - .env
+
+    environment:
+      - NODE_ENV=production
+      # Garante que o Ollama seja acessado pelo host em qualquer SO
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+
+    volumes:
+      # SQLite persistente
+      - ./data:/app/data
+      # Arquivos gerados pelos agentes
+      - ./output:/app/output
+      # Contexto e base de conhecimento dos agentes adicionais
+      - ./agents:/app/agents
+      # Contexto exclusivo do agente Principal
+      - ./specs:/app/specs
+      # Frontend assets para desenvolvimento
+      - ./public:/app/public
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

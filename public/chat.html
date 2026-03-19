@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Architect</title>
+  <link rel="stylesheet" href="/public/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+</head>
+
+<body x-data="chatApp()" x-init="init()">
+
+  <aside class="col-agents">
+    <div class="agents-header">
+      <span class="logo-icon">&#x26a1;</span>
+      <span class="logo-text">Agent Architect</span>
+    </div>
+    <div class="agents-list">
+      <template x-for="ag in agents" :key="ag.id">
+        <div class="agent-item" :class="{ active: activeAgent === ag.id }" @click="switchAgent(ag.id)" role="button"
+          tabindex="0" @keydown.enter.prevent="switchAgent(ag.id)">
+          <div class="agent-item-avatar" x-text="ag.id === 'main' ? '🧠' : '🤖'"
+            style="background:transparent; font-size:20px;"></div>
+          <div class="agent-item-info">
+            <div class="agent-item-name" x-text="ag.name"></div>
+            <div class="agent-item-sub" x-text="ag.id === 'main' ? 'Principal' : 'Especialista'"></div>
+          </div>
+          <button class="agent-delete-btn" x-show="ag.id !== 'main'"
+                  @click.stop="deleteAgent(ag.id)" title="Excluir agente">&#x2715;</button>
+        </div>
+      </template>
+    </div>
+    <div class="agents-footer">
+      <button class="btn-new-agent" @click="showNewAgent = true">
+        + Novo agente
+      </button>
+    </div>
+  </aside>
+
+  <!-- MODAL NOVO AGENTE -->
+  <div class="modal-overlay" x-show="showNewAgent" style="display: none;" @click.self="showNewAgent = false">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Configurações do Agente</h3>
+        <button type="button" @click="showNewAgent = false; newAgentName = ''; newAgentPrompt = ''"
+          class="btn-close-modal">&#x2715;</button>
+      </div>
+      <form @submit.prevent="createAgent()">
+        <div class="modal-body">
+          <label>NOME DO AGENTE</label>
+          <input x-model="newAgentName" class="input-cfg" placeholder="Ex: Canvas AI" required />
+
+          <label style="margin-top: 15px;">PROMPT DE INSTRUÇÕES</label>
+          <textarea x-model="newAgentPrompt" class="input-cfg" rows="4"
+            placeholder="Descreva como o agente deve se comportar..."></textarea>
+          <div class="modal-hint">Este prompt define como o agente irá se comportar durante as interações no chat.</div>
+
+          <label style="margin-top: 15px;">ARQUIVOS DE ESPECIALIDADE (OPCIONAL)</label>
+          <input type="file" multiple @change="newAgentFiles = Array.from($event.target.files)" class="input-cfg"
+            accept=".md,.txt,.json,.csv" />
+          <div class="modal-hint">Faça o upload de bases de conhecimento.</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-cancel"
+            @click="showNewAgent = false; newAgentName = ''; newAgentPrompt = ''; newAgentFiles = []">Cancelar</button>
+          <button type="submit" class="btn-save-modal">Salvar Alterações</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-chat">
+    <header class="chat-header">
+      <div class="chat-header-info">
+        <div class="agent-avatar-lg" x-text="activeAgent === 'main' ? '🧠' : '🤖'"
+          style="background:transparent; font-size:26px;"></div>
+        <div>
+          <div class="agent-name" x-text="currentAgentName"></div>
+          <div class="agent-status">
+            <span class="status-dot" :class="{ active: connected }"></span>
+            <span x-text="connected ? 'Online' : 'Conectando...'"></span>
+          </div>
+        </div>
+      </div>
+        <div class="header-commands">
+          <button class="cmd-btn" @click="sendCommand('/reset')">&#x21ba; Reset</button>
+          <button class="cmd-btn danger" @click="sendCommand('/stop')">&#x23f9; Stop</button>
+          
+          <!-- Botão Detalhes do Agente (Sliders) -->
+          <button class="cmd-btn" style="width:34px; padding:0; display:inline-flex; align-items:center; justify-content:center;" 
+                  x-show="activeAgent !== 'main'" @click="openCurrentAgentDetails()" title="Detalhes do Agente">
+            <svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" height="15" width="15">
+              <line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line>
+              <line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line>
+              <line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line>
+              <line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line>
+              <line x1="17" y1="16" x2="23" y2="16"></line>
+            </svg>
+          </button>
+
+          <button class="cmd-btn" style="font-size:16px; width:34px; padding:0"
+            @click="toggleConfigPanel()" title="Configurações globais">&#x2699;</button>
+        </div>
+    </header>
+
+    <section class="messages" id="messages">
+      <div x-show="currentMessages.length === 0" class="empty-state">
+        <div class="empty-icon">&#x1f4ac;</div>
+        <div>Inicie uma conversa com <strong x-text="currentAgentName"></strong></div>
+        <div class="empty-hint">Comandos: <code>/reset</code> &middot; <code>/stop</code> &middot;
+          <code>/delete &lt;agente&gt;</code></div>
+      </div>
+
+      <template x-for="msg in currentMessages" :key="msg.id">
+        <div class="msg-row" :class="msg.role">
+          <div class="avatar-sm" x-show="msg.role === 'assistant'"
+            x-text="msg.agentName === 'Principal' ? '🧠' : (msg.agentName ? '🤖' : (activeAgent === 'main' ? '🧠' : '🤖'))"
+            style="background:transparent; font-size:20px;"></div>
+          <div class="avatar-sm sys" x-show="msg.role === 'system'">&#x2699;</div>
+          <div class="bubble" :class="msg.role">
+            <div class="bubble-content markdown" x-show="msg.role === 'assistant'" x-html="renderMd(msg.text)"></div>
+            <div class="bubble-content" x-show="msg.role !== 'assistant'" x-text="msg.text"></div>
+            <div class="bubble-footer">
+              <span class="bubble-time" x-text="msg.time"></span>
+              <button class="copy-btn" x-show="msg.role !== 'system'" @click="copyMessage(msg.text, msg.id)"
+                :class="{ copied: copiedId === msg.id }" :title="copiedId === msg.id ? 'Copiado!' : 'Copiar'">
+                <span x-show="copiedId !== msg.id">&#x2398;</span>
+                <span x-show="copiedId === msg.id">&#x2713;</span>
+              </button>
+            </div>
+          </div>
+          <div class="avatar-sm user" x-show="msg.role === 'user'">V</div>
+        </div>
+      </template>
+
+      <div class="msg-row assistant" x-show="thinkingAgents[activeAgent]">
+        <div class="avatar-sm" x-text="activeAgent === 'main' ? '🧠' : '🤖'"
+          style="background:transparent; font-size:20px;"></div>
+        <div class="bubble assistant typing">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        </div>
+      </div>
+    </section>
+
+    <form class="composer" @submit.prevent="send()">
+      <input type="file" multiple x-ref="chatFileInput" @change="chatFiles.push(...Array.from($event.target.files))"
+        style="display: none;" />
+      <div style="display: flex; flex-direction: column; flex: 1; gap: 4px;">
+        <div x-show="chatFiles.length > 0" style="display: flex; gap: 6px; flex-wrap: wrap; padding: 0 4px 4px;">
+          <template x-for="(f, i) in chatFiles" :key="i">
+            <div
+              style="background: rgba(99,91,255,.08); border: 1px solid rgba(99,91,255,.2); border-radius: 20px; padding: 2px 10px; font-size: 11px; display: flex; align-items: center; gap: 6px; color: var(--accent);">
+              <span>&#128206;</span>
+              <span x-text="f.name"></span>
+              <button type="button" @click="chatFiles.splice(i, 1)"
+                style="background: transparent; border: none; cursor: pointer; font-size: 13px; color: var(--muted); line-height: 1;">&times;</button>
+            </div>
+          </template>
+        </div>
+        <textarea x-model="input" placeholder="Digite sua mensagem... (Enter envia | /reset /stop /delete)" rows="1"
+          @keydown.enter="if (!$event.shiftKey && !$event.ctrlKey) { $event.preventDefault(); send(); }"
+          @input="autoResize($event)" :disabled="thinking"></textarea>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+        <button type="button" @click="$refs.chatFileInput.click()" :disabled="thinking"
+          style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 8px; font-size: 20px; color: var(--muted); display: flex; align-items: center;"
+          title="Anexar arquivo">&#128206;</button>
+        <button type="submit" class="btn-send" :disabled="(!input.trim() && chatFiles.length === 0) || thinking">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" class="icon-send">
+            <path
+              d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z"
+              fill="currentColor" />
+          </svg>
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <aside class="col-config" x-show="showRightPanel" :class="{ 'hidden': !showRightPanel }" x-transition>
+
+    <!-- GLOBAL CONFIG MODE -->
+    <template x-if="rightPanelMode === 'config'">
+      <div style="display:flex; flex-direction:column; height:100%;">
+        <div class="config-panel-header">
+          &#x2699; Configura&ccedil;&otilde;es
+          <button @click="showRightPanel = false"
+            style="float:right; background:none; border:none; cursor:pointer; color:var(--muted)">&#x2715;</button>
+        </div>
+        <form class="config-form" @submit.prevent="saveConfig()">
+          <div class="config-section-title">AI Engine</div>
+          <div class="config-field">
+            <label>Provedor LLM</label>
+            <select x-model="cfg.provider" class="input-cfg">
+              <option value="ollama">Ollama (Local)</option>
+            </select>
+          </div>
+          <div class="config-field">
+            <label>Ollama Base URL</label>
+            <input x-model="cfg.ollamaBaseUrl" class="input-cfg" placeholder="http://host.docker.internal:11434" />
+          </div>
+          <div class="config-field">
+            <label>Modelo</label>
+            <input x-model="cfg.ollamaModel" class="input-cfg" placeholder="llama3.1:8b" />
+          </div>
+          <div class="config-section-title" style="margin-top:18px">Telegram</div>
+          <div class="config-field">
+            <label>Bot Token</label>
+            <input x-model="cfg.telegramBotToken" class="input-cfg" type="password" placeholder="Bot Token"
+              autocomplete="off" />
+          </div>
+          <div class="config-field">
+            <label>User ID Permitido</label>
+            <input x-model="cfg.telegramAllowedUser" class="input-cfg" placeholder="123456789" />
+          </div>
+          <div class="config-section-title" style="margin-top:18px">Interface</div>
+          <div class="config-toggle">
+            <span>Telegram ativo</span>
+            <label class="toggle-switch">
+              <input type="checkbox" x-model="cfg.enableTelegram" />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+          <div class="config-toggle">
+            <span>Web Chat ativo</span>
+            <label class="toggle-switch">
+              <input type="checkbox" x-model="cfg.enableWebChat" />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+          <div class="config-toggle">
+            <span>Fluxo de Pensamento</span>
+            <label class="toggle-switch" title="Mostra os passos internos de cada Agente">
+              <input type="checkbox" x-model="cfg.showThoughtFlow" />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+          <div class="config-toggle">
+            <span>Máquina de Escrever</span>
+            <label class="toggle-switch" title="Digita a resposta letra por letra na revisão (Stream)">
+              <input type="checkbox" x-model="cfg.typewriterEffect" />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+          <button type="submit" class="btn-save" :disabled="cfgSaving">
+            <span
+              x-text="cfgSaving ? 'Salvando...' : cfgSaved ? 'Salvo!' : 'Salvar Configura&ccedil;&otilde;es'"></span>
+          </button>
+          <div class="config-note">
+            Altera&ccedil;&otilde;es de token Telegram requerem reinicio do container.
+          </div>
+        </form>
+      </div>
+    </template>
+
+    <!-- AGENT DETAILS MODE -->
+    <template x-if="rightPanelMode === 'agentDetails' && editAgentData">
+      <div style="display:flex; flex-direction:column; height:100%;">
+        <div class="config-panel-header" style="display:flex; align-items:center; gap:8px;">
+          <button @click="rightPanelMode = 'config'"
+            style="background:none; border:none; cursor:pointer; color:var(--muted); font-size:16px;">&#8592;</button>
+          <div style="flex:1;">Detalhes do Agente</div>
+          <button @click="showRightPanel = false"
+            style="background:none; border:none; cursor:pointer; color:var(--muted)">&#x2715;</button>
+        </div>
+        <form class="config-form" @submit.prevent="saveAgentDetails()">
+          <div class="config-section-title">Identificação</div>
+          <div class="config-field">
+            <label>NOME</label>
+            <input x-model="editAgentData.name" class="input-cfg" required />
+          </div>
+          <div class="config-section-title" style="margin-top:18px">Instruções</div>
+          <div class="config-field">
+            <label>PROMPT DEFAULT</label>
+            <textarea x-model="editAgentData.description" class="input-cfg" rows="12"></textarea>
+          </div>
+          <div class="config-field">
+            <label>Modelo LLM</label>
+            <input type="text" x-model="editAgentData.llmModel" class="input-cfg" placeholder="Deixe em branco para usar o modelo padrão" />
+          </div>
+          <button type="submit" class="btn-save" :disabled="editAgentSaving" style="margin-top:auto;">
+            <span x-text="editAgentSaving ? 'Salvando...' : 'Salvar Agente'"></span>
+          </button>
+        </form>
+      </div>
+    </template>
+
+  </aside>
+
+  <script>
+    function chatApp() {
+      return {
+        sessionId: '',
+        input: '', // Changed from draft to input
+        thinking: false,
+        connected: false,
+        stream: null,
+        copiedId: null,
+        agents: [],
+        activeAgent: 'main',
+        currentAgentName: 'Principal',
+        currentMessages: [],
+        showNewAgent: false,
+        newAgentName: '',
+        newAgentPrompt: '',
+        newAgentLlmModel: '', // Added newAgentLlmModel
+        newAgentFiles: [],
+        chatFiles: [], // Added chatFiles
+        messagesByAgent: {},
+        thinkingAgents: {}, // Rastreio de digitando por agente
+        showRightPanel: false,
+        rightPanelMode: 'config', // 'config' | 'agentDetails'
+        editAgentData: null,
+        editAgentSaving: false,
+        cfg: {
+          provider: 'ollama',
+          ollamaBaseUrl: '',
+          ollamaModel: '',
+          telegramBotToken: '',
+          telegramAllowedUser: '',
+          enableTelegram: true,
+          enableWebChat: true,
+          showThoughtFlow: true,
+          typewriterEffect: true
+        },
+        cfgSaving: false,
+        cfgSaved: false,
+
+        init() {
+          this.sessionId = localStorage.getItem('aa-session');
+          if (!this.sessionId) {
+            this.sessionId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : 'sess-' + Math.random().toString(36).slice(2);
+            localStorage.setItem('aa-session', this.sessionId);
+          }
+          this.loadAgents().then(() => {
+            this.loadConfig();
+            this.connectSSE();
+          });
+          this.$watch('showNewAgent', (val) => {
+            if (val) {
+              this.$nextTick(() => {
+                const el = document.querySelector('.modal-body input');
+                if (el) el.focus();
+              });
+            }
+          });
+        },
+
+        scrollToBottom() {
+          this.$nextTick(() => {
+            const el = document.getElementById('messages');
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+        },
+
+        connectSSE() {
+          if (this.stream) this.stream.close();
+          this.stream = new EventSource('/api/chat/stream/' + this.sessionId);
+          this.stream.addEventListener('ready', () => { this.connected = true; });
+          this.stream.addEventListener('user', (ev) => {
+            try { const d = JSON.parse(ev.data); this.pushMessage(d.agentId || this.activeAgent, 'user', d.text); } catch (e) { }
+          });
+          this.stream.addEventListener('assistant', (ev) => {
+            try { const d = JSON.parse(ev.data); this.thinking = false; this.pushMessage(d.agentId || this.activeAgent, 'assistant', d.text); this.playPlin(); } catch (e) { }
+          });
+          this.stream.addEventListener('stream_chunk', (ev) => {
+            try {
+              const d = JSON.parse(ev.data);
+              this.thinking = false;
+              const agentId = d.agentId || this.activeAgent;
+              if (!this.messagesByAgent[agentId]) this.messagesByAgent[agentId] = [];
+              const msgs = this.messagesByAgent[agentId];
+              const last = msgs[msgs.length - 1];
+              if (!last || last.role !== 'assistant' || last.isDone) {
+                const time = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                msgs.push({ id: Math.random().toString(36).slice(2), role: 'assistant', text: d.text, time, isDone: false });
+                this.playPlin();
+              } else {
+                last.text += d.text;
+              }
+              if (agentId === this.activeAgent) {
+                this.currentMessages = msgs.slice();
+                this.scrollToBottom();
+              }
+            } catch (e) { }
+          });
+          this.stream.addEventListener('stream_done', (ev) => {
+            try {
+              const d = JSON.parse(ev.data);
+              const agentId = d.agentId || this.activeAgent;
+              const msgs = this.messagesByAgent[agentId];
+              if (msgs && msgs.length > 0) msgs[msgs.length - 1].isDone = true;
+            } catch (e) { }
+          });
+          this.stream.addEventListener('system', (ev) => {
+            try { const d = JSON.parse(ev.data); this.thinking = false; this.pushMessage(d.agentId || this.activeAgent, 'system', d.text); } catch (e) { }
+          });
+          this.stream.addEventListener('thinking', (ev) => {
+            try {
+              const d = JSON.parse(ev.data);
+              this.thinkingAgents = { ...this.thinkingAgents, [d.agentId]: !!d.value };
+              if (d.agentId === this.activeAgent) this.thinking = !!d.value;
+            } catch (e) { }
+          });
+          this.stream.onerror = () => { this.connected = false; setTimeout(() => this.connectSSE(), 3000); };
+        },
+
+        pushMessage(agentId, role, text, rawAgentName) {
+          if (!this.messagesByAgent[agentId]) this.messagesByAgent[agentId] = [];
+          const time = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+          this.messagesByAgent[agentId].push({ id: Math.random().toString(36).slice(2), role, text, time, isDone: true, agentName: rawAgentName });
+          if (agentId === this.activeAgent) {
+            this.currentMessages = this.messagesByAgent[agentId].slice();
+            this.scrollToBottom();
+          }
+        },
+
+        send() {
+          const text = this.input.trim();
+          if (!text && this.chatFiles.length === 0) return;
+          if (this.thinking) return;
+
+          this.input = ''; // Clear input field
+          // No textarea auto-resize needed as it's now an input field
+
+          if (text.startsWith('/')) {
+            this.sendCommand(text);
+            this.chatFiles = []; // Clear files even if it's a command
+            return;
+          }
+
+          this.thinking = true;
+
+          const fd = new FormData();
+          fd.append('sessionId', this.sessionId);
+          fd.append('agentId', this.activeAgent);
+          fd.append('message', text);
+          for (const f of this.chatFiles) { fd.append('files', f); }
+          this.chatFiles = []; // Clear files after adding to FormData
+
+          fetch('/api/chat/message', {
+            method: 'POST',
+            body: fd
+          }).catch(() => {
+            this.thinking = false;
+            this.pushMessage(this.activeAgent, 'assistant', 'Erro ao enviar mensagem.');
+          });
+        },
+
+        sendCommand(cmd) {
+          fetch('/api/chat/message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ sessionId: this.sessionId, agentId: this.activeAgent, message: cmd })
+          }).then(r => r.json()).then(data => {
+            if (!data.ok) this.pushMessage(this.activeAgent, 'system', 'Erro: ' + (data.error || 'desconhecido'));
+            if (data.command === 'reset') { this.messagesByAgent[this.activeAgent] = []; this.currentMessages = []; }
+          }).catch(() => this.pushMessage(this.activeAgent, 'system', 'Erro ao executar comando.'));
+        },
+
+        loadAgents() {
+          return fetch('/api/agents').then(r => r.json()).then(d => {
+            this.agents = d.agents || [{ id: 'main', name: 'Principal', description: '' }];
+            this.agents.forEach(ag => { if (!this.messagesByAgent[ag.id]) this.messagesByAgent[ag.id] = []; });
+            this.updateCurrentAgent();
+          }).catch(() => { this.agents = [{ id: 'main', name: 'Principal', description: '' }]; this.updateCurrentAgent(); });
+        },
+
+        createAgent() {
+          const name = this.newAgentName.trim();
+          const desc = this.newAgentPrompt.trim();
+          if (!name) return;
+          const formData = new FormData();
+          formData.append('name', this.newAgentName);
+          formData.append('description', this.newAgentPrompt);
+          formData.append('llmModel', this.newAgentLlmModel);
+          for (const f of this.newAgentFiles) {
+            formData.append('files', f);
+          }
+
+          fetch('/api/agents', {
+            method: 'POST',
+            body: formData
+          }).then(r => r.json()).then(d => {
+            if (d.ok) {
+              this.agents.push(d.agent);
+              this.messagesByAgent[d.agent.id] = [];
+              this.switchAgent(d.agent.id);
+              this.showNewAgent = false;
+              this.newAgentName = '';
+              this.newAgentPrompt = '';
+              this.newAgentLlmModel = '';
+              this.newAgentFiles = [];
+            }
+          }).catch(() => { });
+        },
+
+        switchAgent(id) {
+          this.activeAgent = id;
+          this.thinking = false;
+          this.updateCurrentAgent();
+          this.loadChatHistory(id);
+        },
+
+        loadChatHistory(agentId) {
+          fetch(`/api/chat/history/${this.sessionId}/${agentId}`)
+            .then(r => r.json())
+            .then(d => {
+              if (d.ok && d.messages) {
+                this.messagesByAgent[agentId] = d.messages.map(m => ({
+                  id: Math.random().toString(36).slice(2),
+                  role: m.role,
+                  text: m.content,
+                  time: new Date(m.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+                  isDone: true,
+                  agentName: m.agentName
+                }));
+                if (agentId === this.activeAgent) {
+                  this.currentMessages = this.messagesByAgent[agentId].slice();
+                  this.scrollToBottom();
+                }
+              }
+            }).catch(() => { });
+        },
+
+        updateCurrentAgent() {
+          const ag = this.agents.find(a => a.id === this.activeAgent);
+          this.currentAgentName = ag ? ag.name : 'Agent';
+          this.currentMessages = (this.messagesByAgent[this.activeAgent] || []).slice();
+        },
+
+        openAgentDetails(ag) {
+          this.editAgentData = { id: ag.id, name: ag.name, description: ag.description, llmModel: ag.llmModel || '' };
+          this.rightPanelMode = 'agentDetails';
+          this.showRightPanel = true;
+        },
+
+        openCurrentAgentDetails() {
+          const ag = this.agents.find(a => a.id === this.activeAgent);
+          if (ag && ag.id !== 'main') {
+            this.openAgentDetails(ag);
+          }
+        },
+
+        saveAgentDetails() {
+          if (!this.editAgentData) return;
+          this.editAgentSaving = true;
+          fetch('/api/agents/' + this.editAgentData.id, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: this.editAgentData.name,
+              description: this.editAgentData.description,
+              llmModel: this.editAgentData.llmModel
+            })
+          }).then(r => r.json()).then(d => {
+            if (d.ok) {
+              const ag = this.agents.find(a => a.id === this.editAgentData.id);
+              if (ag) {
+                ag.name = this.editAgentData.name;
+                ag.description = this.editAgentData.description;
+                ag.llmModel = this.editAgentData.llmModel;
+                if (this.activeAgent === ag.id) this.updateCurrentAgent();
+              }
+            }
+          }).catch(() => { }).finally(() => { this.editAgentSaving = false; });
+        },
+
+        toggleConfigPanel() {
+          if (this.showRightPanel && this.rightPanelMode === 'config') {
+            this.showRightPanel = false;
+          } else {
+            this.rightPanelMode = 'config';
+            this.showRightPanel = true;
+          }
+        },
+
+        deleteAgent(agentId) {
+          if (agentId === 'main') return;
+          if (!confirm('Excluir agente ' + agentId + '?')) return;
+          fetch('/api/agents/' + agentId, { method: 'DELETE' }).catch(() => { });
+          this.agents = this.agents.filter(a => a.id !== agentId);
+          delete this.messagesByAgent[agentId];
+          if (this.activeAgent === agentId) this.switchAgent('main');
+        },
+
+        loadConfig() {
+          return fetch('/api/config').then(r => r.json()).then(d => {
+            if (d.ok) {
+              this.cfg.ollamaBaseUrl = d.config.ollamaBaseUrl;
+              this.cfg.ollamaModel = d.config.ollamaModel;
+              this.cfg.telegramAllowedUser = d.config.telegramAllowedUser || '';
+              this.cfg.enableTelegram = d.config.enableTelegram;
+              this.cfg.enableWebChat = d.config.enableWebChat;
+              this.cfg.showThoughtFlow = d.config.showThoughtFlow;
+              this.cfg.typewriterEffect = d.config.typewriterEffect;
+            }
+          }).catch(() => { });
+        },
+
+        saveConfig() {
+          this.cfgSaving = true; this.cfgSaved = false;
+          fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              ollamaBaseUrl: this.cfg.ollamaBaseUrl,
+              ollamaModel: this.cfg.ollamaModel,
+              telegramBotToken: this.cfg.telegramBotToken || '***',
+              telegramAllowedUser: this.cfg.telegramAllowedUser,
+              enableTelegram: String(this.cfg.enableTelegram),
+              enableWebChat: String(this.cfg.enableWebChat),
+              showThoughtFlow: String(this.cfg.showThoughtFlow),
+              typewriterEffect: String(this.cfg.typewriterEffect)
+            })
+          }).then(() => { this.cfgSaved = true; setTimeout(() => { this.cfgSaved = false; }, 3000); })
+            .catch(() => { }).finally(() => { this.cfgSaving = false; });
+        },
+
+        renderMd(text) {
+          if (!text) return '';
+          try { return marked.parse(text, { breaks: true }); } catch (e) { return text; }
+        },
+
+        copyMessage(text, id) {
+          navigator.clipboard.writeText(text).then(() => {
+            this.copiedId = id;
+            setTimeout(() => { if (this.copiedId === id) this.copiedId = null; }, 2000);
+          }).catch(() => { });
+        },
+
+        autoResize(event) {
+          const ta = event.target;
+          ta.style.height = 'auto';
+          ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
+        },
+        playPlin() {
+          try {
+            const AContext = window.AudioContext || window.webkitAudioContext;
+            if (!AContext) return;
+            const ctx = new AContext();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(880, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.3, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.35);
+          } catch (e) { }
+        }
+      };
+    }
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.0/dist/cdn.min.js"></script>
+</body>
+
+</html>
